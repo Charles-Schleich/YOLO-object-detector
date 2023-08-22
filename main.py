@@ -1,152 +1,208 @@
-import os
+"""Executable script to apply bounding boxes to images."""
+
+from pathlib import Path
+
 import cv2
 import numpy as np
-
-# Initialize the NET
-model = "yolov7-tiny_480x640.onnx"
-net = cv2.dnn.readNet(model)
-output_names = net.getUnconnectedOutLayersNames()
-
-# Get Net Width + Height
-input_shape = os.path.splitext(os.path.basename(model))[
-    0].split('_')[-1].split('x')
-
-net_height = int(input_shape[0])
-net_width = int(input_shape[1])
+from tqdm import tqdm
+import os
 
 
-# Load Class names
-class_names = list(
-    map(lambda x: x.strip(), open('class.names', 'r').readlines()))
+def prepare_image(image: np.ndarray, shape: tuple) -> np.ndarray:
+    """Prepare the image for the network.
 
-conf_threshold = 0.7
-iou_threshold = 0.5
-colors = np.random.default_rng(3).uniform(
-    0, 255, size=(len(class_names), 3))
-
-
-def prepare_image(image):
-
+    Currently only supports the following
+    - Resize
+    - Normalise
+    """
     # Normalize for Object Detection
-    normalized_image = cv2.normalize(
-        image, None, alpha=0, beta=255, norm_type=cv2.NORM_MINMAX, dtype=cv2.CV_8UC1
+    image = cv2.normalize(
+        src=image,
+        dst=None,
+        alpha=0,
+        beta=255,
+        norm_type=cv2.NORM_MINMAX,
+        dtype=cv2.CV_8UC1,
     )
 
     # Resize input image to match net size
-    input_img = cv2.resize(
-        normalized_image, (net_width, net_height)
-    )
+    image = cv2.resize(image, shape)
 
-    return input_img
-
-
-def detect(processed_image):
-
-    blob = cv2.dnn.blobFromImage(processed_image, 1 / 255.0)
-
-    # Perform inference on the image
-    net.setInput(blob)
-
-    # Runs the forward pass to get output of the output layers
-    outputs = net.forward(output_names)
-
-    return outputs
-
-
-def draw_detections(image, boxes, scores, class_ids):
-    for box, score, class_id in zip(boxes, scores, class_ids):
-        x, y, w, h = box.astype(int)
-        color = colors[class_id]
-
-        # Draw rectangle
-        cv2.rectangle(image, (x, y), (x+w, y+h), color, thickness=2)
-        label = class_names[class_id]
-        label = f'{label} {int(score * 100)}%'
-        cv2.getTextSize(label, cv2.FONT_HERSHEY_SIMPLEX, 0.5, 1)
-        cv2.putText(image, label, (x, y - 10),
-                    cv2.FONT_HERSHEY_SIMPLEX, 1, color, thickness=2)
     return image
 
 
-def rescale_boxes(boxes):
-    input_shape = np.array(
-        [net_width, net_height, net_width, net_height])
-    boxes = np.divide(boxes, input_shape, dtype=np.float32)
-    boxes *= np.array([img_width, img_height,
-                       img_width, img_height])
-    return boxes
+def forward_pass(
+    image: np.ndarray, network: cv2.dnn.Net, output_names: tuple
+) -> np.ndarray:
+    """Pass a pre-processed image through the network and extract the outputs.
+
+    Will also apply 1/255 scaling to the input image
+    """
+    blob = cv2.dnn.blobFromImage(image, 1 / 255.0)
+    network.setInput(blob)
+    # 1 for output type, 1 for batch dim
+    return network.forward(output_names)[0][0]
 
 
-def extract_boxes(predictions):
-    # Extract boxes from predictions
+def draw_boxes(
+    image: np.ndarray,
+    boxes: np.ndarray,
+    scores: np.ndarray,
+    class_ids: np.ndarray,
+    class_names: list,
+    class_colors: np.ndarray,
+) -> np.ndarray:
+    """Draw the bounding boxes onto the pixel values of the image."""
+    for box, score, class_id in zip(boxes, scores, class_ids):
+        # Get the pixes coordinates and the appropriate colour and name
+        x, y, w, h = box.astype(int)
+        color = class_colors[class_id]
+        label = f"{class_names[class_id]} {int(score * 100)}%"
+
+        # TODO Find a better way to perform the autoscaling
+        scale = int(0.005 * min(image.shape[:2]))
+
+        # Draw the rectangle and text onto the image
+        cv2.rectangle(image, (x, y), (x + w, y + h), color, thickness=scale)
+        # cv2.getTextSize(label, cv2.FONT_HERSHEY_SIMPLEX, lw//5, lw//2)
+        cv2.putText(
+            image,
+            label,
+            org=(x, y - 10),
+            fontFace=cv2.FONT_HERSHEY_SIMPLEX,
+            fontScale=scale // 4,
+            color=color,
+            thickness=scale // 2,
+        )
+    return image
+
+
+def extract_boxes(predictions: np.ndarray, size_ratio: np.ndarray) -> np.ndarray:
+    """Pull out the bounding boxes from the predictions and resize to original."""
+
+    # Extract boxes from predictions (x_center, y_center, width, height)
     boxes = predictions[:, :4]
 
     # Scale boxes to original image dimensions
-    boxes = rescale_boxes(boxes)
+    boxes *= np.array([*size_ratio, *size_ratio])
 
-    # Convert boxes to xywh format
-    boxes_ = np.copy(boxes)
-    boxes_[..., 0] = boxes[..., 0] - boxes[..., 2] * 0.5
-    boxes_[..., 1] = boxes[..., 1] - boxes[..., 3] * 0.5
-    return boxes_
+    # Change the format to (x_left, y_bottom, width, height)
+    boxes[..., 0] -= boxes[..., 2] * 0.5
+    boxes[..., 1] -= boxes[..., 3] * 0.5
+    return boxes
 
 
-def process_output(output):
+def process_output(
+    outputs: np.ndarray,
+    size_ratio: np.ndarray,
+    conf_threshold: float = 0.5,
+    iou_threshold: float = 0.5,
+) -> tuple[np.ndarray]:
+    """Process the output of the yolo model to get a collection of bounding boxes.
 
-    predictions = np.squeeze(output[0])
+    Parameters
+    ----------
+    outputs : np.ndarray
+        Full YOLO model output of shape (60 x 40 x 7, 85).
+        (60 x 40 x 7) = GridX x GridY x Num_Anchors
+        85 = Box features (x_cent, y_cent, width, height, prob_object, *prob_classes)
+    size_ratio : np.ndarray
+        The ratio of the original image size to the model input size.
+    conf_threshold : float, optional
+        The threshold for filtering out low confidence predictions.
+        Default is 0.5.
+    iou_threshold : float, optional
+        The Intersection Over Union (IOU) threshold for non-maxima suppression.
+        Default is 0.5.
 
-    # Filter out object confidence scores below threshold
-    obj_conf = predictions[:, 4]
+    Returns
+    -------
+    tuple[np.ndarray]
+        The surviving boxes after non-maxima suppression, their scores, and class IDs.
+    """
 
-    predictions = predictions[obj_conf > conf_threshold]
-    obj_conf = obj_conf[obj_conf > conf_threshold]
+    # Get the anchors the have a high confidence that they contain an object
+    obj_conf = outputs[:, 4]
+    confidence_mask = obj_conf > conf_threshold
+    outputs = outputs[confidence_mask]
+    obj_conf = obj_conf[confidence_mask]
 
     # Multiply class confidence with bounding box confidence
-    predictions[:, 5:] *= obj_conf[:, np.newaxis]
+    outputs[:, 5:] *= obj_conf[:, None]  # Is this necc?
 
-    # Get the scores
-    scores = np.max(predictions[:, 5:], axis=1)
+    # Get the maximum class score
+    max_scores = np.max(outputs[:, 5:], axis=-1)
 
-    # Filter out the objects with a low score
-    valid_scores = scores > conf_threshold
-    predictions = predictions[valid_scores]
-    scores = scores[valid_scores]
+    # Filter out boxes where the class is ambiguous (low max score)
+    valid_mask = max_scores > conf_threshold
+    outputs = outputs[valid_mask]
+    max_scores = max_scores[valid_mask]
 
-    # Get the class with the highest confidence
-    class_ids = np.argmax(predictions[:, 5:], axis=1)
+    # Get the class id corresponding to the max score
+    class_ids = np.argmax(outputs[:, 5:], axis=-1)
 
     # Get bounding boxes for each object
-    boxes = extract_boxes(predictions)
+    boxes = extract_boxes(outputs, size_ratio)
 
     # Apply non-maxima suppression to suppress weak, overlapping bounding boxes
     indices = cv2.dnn.NMSBoxes(
-        boxes.tolist(), scores.tolist(), conf_threshold, iou_threshold)
-    if len(indices) > 0:
-        indices = indices.flatten()
+        boxes, max_scores, conf_threshold, iou_threshold)
 
-    return boxes[indices], scores[indices], class_ids[indices]
+    # Return the surviving boxes, their scores and class ids
+    return boxes[indices], max_scores[indices], class_ids[indices]
+
+
+def main() -> None:
+    """Run script."""
+
+    # Initial args
+    model_path = "model/yolov7-tiny_480x640.onnx"
+    class_name_path = "model/class_names.txt"
+    image_folder = "images"
+    output_folder = "outputs"
+    conf_threshold = 0.5
+    iou_threshold = 0.5
+
+    # Create the output folder if it doesn't exist
+    os.makedirs(output_folder, exist_ok=True)
+
+    # Load the pretrained network ONNX file and the associated class names
+    net = cv2.dnn.readNet(model_path)
+    output_names = net.getUnconnectedOutLayersNames()
+
+    # Get the expected image dimensions based on the model name (width x height)
+    input_shape = Path(model_path).stem.split("_")[-1].split("x")
+    input_shape = [int(x) for x in input_shape]
+    input_shape = input_shape[::-1]
+
+    # Get names and colors to represent each class
+    class_names = [x.strip() for x in open(class_name_path).readlines()]
+    class_colors = np.random.default_rng(3).uniform(
+        0, 255, size=(len(class_names), 3))
+
+    # Get a list of images to run over
+    file_list = list(Path(image_folder).glob("*"))
+    for img_path in tqdm(file_list, "Drawing boxes on images"):
+        image = cv2.imread(str(img_path))
+
+        # Get the size ratio (width x height) to reposition the boxes
+        size_ratio = np.divide(image.shape[1::-1], input_shape)
+
+        # Prepare the image and pass through the network
+        prepared_image = prepare_image(image, input_shape)
+        output = forward_pass(prepared_image, net, output_names)
+
+        # Get a list of bounding boxes in the original img dimensions
+        boxes, scores, class_ids = process_output(
+            output, size_ratio, conf_threshold, iou_threshold
+        )
+
+        # Draw the bounding boxes onto the original image and save
+        output_img = draw_boxes(
+            image, boxes, scores, class_ids, class_names, class_colors
+        )
+        cv2.imwrite(str(Path(output_folder, img_path.name)), output_img)
 
 
 if __name__ == "__main__":
-
-    # 1. Load image
-    image = cv2.imread("./image.jpg")
-    img_height, img_width = image.shape[:2]  # [h,w,d]
-
-    # 2. Prepare Image
-    normalized_image = prepare_image(image)
-
-    # 3. Forward Pass through Net
-    net_output = detect(normalized_image)
-
-    # 4. Process Net outputs
-    boxes, scores, class_ids = process_output(net_output)
-
-    # 5. Draw Bounding boxes on images
-    output_img = draw_detections(image, boxes, scores, class_ids)
-
-    cv2.imwrite("./image_out.jpg", output_img)
-
-    # cv2.imshow("Output image", output_img)
-    # cv2.waitKey(0)
-    # cv2.destroyAllWindows()
+    main()
