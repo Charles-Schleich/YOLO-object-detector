@@ -18,6 +18,8 @@ Using CV2 to:
 ## Required Packages
 `apt-get install -y libopencv-dev `
 
+`pip install -r requirements.txt`
+
 ## Python Functions to be ported to Rust
 ### Preprocessing:
 
@@ -38,18 +40,20 @@ Using CV2 to:
 `cv2.dnn.NMSBoxes`
     - potentially exists [media-pipe-nms](https://github.com/WasmEdge/mediapipe-rs/blob/7eee0492804661ccd76ba1da75c693f88c0ecc85/src/postprocess/processing/vision/non_max_suppression.rs#L107)
 
-`rescale_boxes(boxes)`:
+For drawing directly to input image  
+`cv2.getTextSize`  
 
-`extract_boxes(predictions)`
+`cv2.putText`  
 
-For drawing directly to input image
-`cv2.getTextSize`
+`np.max` - gets max value along array
 
-`cv2.putText`
+`np.argmax` - gets indicies of maximum value along an axis
 
 `draw_detections(image, boxes, scores, class_ids)`
     - potentially exists [media-pipe-draw-detections](https://github.com/WasmEdge/mediapipe-rs/blob/7eee0492804661ccd76ba1da75c693f88c0ecc85/src/postprocess/utils/vision/draw_detections.rs#L9)
 
+`rescale_boxes(boxes)` - Could become a convenience function once bounding boxes are extracted
+`extract_boxes(predictions)` - Could become a convenience function once a forward pass has been made
 
 It potentially makes sense to have a single function to take the output tensor of the forward pass of a YOLO and process it into something that can be consumed by the program / applied directly to the image.
 Something with a function signature:
