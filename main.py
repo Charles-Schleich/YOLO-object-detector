@@ -68,6 +68,8 @@ def draw_boxes(
 
         # TODO Find a better way to perform the autoscaling
         scale = int(0.005 * min(image.shape[:2]))
+        print("scale",scale)
+        print("colour",scale)
 
         # Draw the rectangle and text onto the image
         cv2.rectangle(image, (x, y), (x + w, y + h), color, thickness=scale)
@@ -139,7 +141,7 @@ def process_output(
 
     # Get the maximum class score
     max_scores = np.max(outputs[:, 5:], axis=-1)
-
+    
     # Filter out boxes where the class is ambiguous (low max score)
     valid_mask = max_scores > conf_threshold
     outputs = outputs[valid_mask]
@@ -150,7 +152,8 @@ def process_output(
 
     # Get bounding boxes for each object
     boxes = extract_boxes(outputs, size_ratio)
-
+    print("max_scores",max_scores)
+    print("max_scores",max_scores.shape)
     # Apply non-maxima suppression to suppress weak, overlapping bounding boxes
     indices = cv2.dnn.NMSBoxes(
         boxes, max_scores, conf_threshold, iou_threshold)
@@ -163,7 +166,6 @@ def main() -> None:
     """Run script."""
 
     # Initial args
-    model_path = "model/yolov7-tiny_480x640.onnx"
     model_path = "model/yolov7-tiny_480x640.onnx"
     class_name_path = "model/class_names.txt"
     image_folder = "images"
@@ -190,7 +192,7 @@ def main() -> None:
 
     # Get a list of images to run over
     # file_list = list(Path(image_folder).glob("*dog*"))
-    file_list = list(Path(image_folder).glob("*"))
+    file_list = list(Path(image_folder).glob("*dog*"))
     for img_path in tqdm(file_list, "Drawing boxes on images"):
         print(img_path)
 
@@ -202,8 +204,8 @@ def main() -> None:
         # Prepare the image and pass through the network
         prepared_image = prepare_image(image, input_shape)
         output = forward_pass(prepared_image, net, output_names)
-        print(output)
-        print(output.shape)
+        # print(output.shape)
+        # print(output)
 
         # Get a list of bounding boxes in the original img dimensions
         boxes, scores, class_ids = process_output(
