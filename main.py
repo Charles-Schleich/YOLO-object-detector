@@ -16,7 +16,10 @@ def prepare_image(image: np.ndarray, shape: tuple) -> np.ndarray:
     - Normalise
     """
     # Normalize for Object Detection
-    image = cv2.normalize(
+    # print(image[0][0])
+    # print("Equal ",image.array_equiv(image))
+    # print("Equal ",(image == image).all())
+    image_norm = cv2.normalize(
         src=image,
         dst=None,
         alpha=0,
@@ -24,9 +27,13 @@ def prepare_image(image: np.ndarray, shape: tuple) -> np.ndarray:
         norm_type=cv2.NORM_MINMAX,
         dtype=cv2.CV_8UC1,
     )
+    
+    # print("Equal image_norm",(image == image_norm).all())
 
     # Resize input image to match net size
     image = cv2.resize(image, shape)
+
+    # print(image)
 
     return image
 
@@ -157,6 +164,7 @@ def main() -> None:
 
     # Initial args
     model_path = "model/yolov7-tiny_480x640.onnx"
+    model_path = "model/yolov7-tiny_480x640.onnx"
     class_name_path = "model/class_names.txt"
     image_folder = "images"
     output_folder = "outputs"
@@ -181,8 +189,11 @@ def main() -> None:
         0, 255, size=(len(class_names), 3))
 
     # Get a list of images to run over
+    # file_list = list(Path(image_folder).glob("*dog*"))
     file_list = list(Path(image_folder).glob("*"))
     for img_path in tqdm(file_list, "Drawing boxes on images"):
+        print(img_path)
+
         image = cv2.imread(str(img_path))
 
         # Get the size ratio (width x height) to reposition the boxes
@@ -191,6 +202,8 @@ def main() -> None:
         # Prepare the image and pass through the network
         prepared_image = prepare_image(image, input_shape)
         output = forward_pass(prepared_image, net, output_names)
+        print(output)
+        print(output.shape)
 
         # Get a list of bounding boxes in the original img dimensions
         boxes, scores, class_ids = process_output(
