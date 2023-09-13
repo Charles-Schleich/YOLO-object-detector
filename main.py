@@ -204,8 +204,8 @@ def main() -> None:
         # Prepare the image and pass through the network
         prepared_image = prepare_image(image, input_shape)
         output = forward_pass(prepared_image, net, output_names)
-        # print(output.shape)
-        # print(output)
+        print("output.shape",output.shape)
+        print("output" ,output)
 
         # Get a list of bounding boxes in the original img dimensions
         boxes, scores, class_ids = process_output(

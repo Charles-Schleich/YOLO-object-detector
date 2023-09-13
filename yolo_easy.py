@@ -14,24 +14,29 @@ results = model([img1])  # return a list of Results objects
 
 def draw_box(
     image: np.ndarray,
+    orig_shape: np.ndarray,
     box: np.ndarray,
     class_id: int,
     class_names: list,
 ) -> np.ndarray:
     """Draw the bounding boxes onto the pixel values of the image."""
-    x, y, w, h = int(box[0]), int(box[1]), int(box[2]), int(box[3])
+    w_orig, h_orig = (orig_shape[0], orig_shape[1])
+    x_1, y_1 = int(box[0]), int(box[1])
+    x_2, y_2 = int(box[2]), int(box[3])
+
     print("class_id ", class_id, type(class_id))
     label = f"{class_names[class_id]} "
     # label = f"{class_names[class_id]} {int(score * 100)}%"
     scale = int(6)
     color = 6
 
-    cv2.rectangle(image, (x, y), (x + w, y + h), color, thickness=scale)
+    cv2.rectangle(image, (x_1, y_1), (x_2, y_2), color, thickness=scale)
     # cv2.getTextSize(label, cv2.FONT_HERSHEY_SIMPLEX, lw//5, lw//2)
+    # cv2.rectangle(image, (0, 0), (x_2, y_2), 1, thickness=scale)
     cv2.putText(
         image,
         label,
-        org=(x, y - 10),
+        org=(x_1, y_1 - 10),
         fontFace=cv2.FONT_HERSHEY_SIMPLEX,
         fontScale=scale//4,
         color=color,
@@ -40,26 +45,31 @@ def draw_box(
     return image
 
 
-for result in results:
-    # print(result)
-    boxes = result.boxes  # Boxes object for bbox outputs
-    # masks = result.masks  # Masks object for segmentation masks outputs
-    # keypoints = result.keypoints  # Keypoints object for pose outputs
-    # probs = result.probs  # Probs object for classification outputs
-    names = result.names
-    print(names)
+image = cv2.imread(str(img1))
+size_ratio = np.divide(image.shape[1::-1], (640, 640))
+print("size_ratio ", size_ratio)
 
-    xywh = boxes.xywh
-    classes = boxes.cls
+for result in results:
+    boxes = result.boxes  # Boxes object for bbox outputs
+    names = result.names
+    orig_shape = result.orig_shape
+
+    # print(names)
+    # xywh = boxes.xywh
+    # classes = boxes.cls
     # print(boxes)
     # print(classes)
-    image = cv2.imread(str(img1))
+
     for box in boxes:
-        xywh = box.xywh
+        xyxy = box.xyxy
         cls = box.cls
-        print(xywh)
-        image = draw_box(image, xywh[0], cls[0].item(), names)
-        # print(box)
+        print(box.xyxy[0])
+        print(box.xywh[0])
+        print(box.xyxyn[0])
+        print(box.xywhn[0])
+
+        image = draw_box(image, orig_shape, xyxy[0], cls[0].item(), names)
+        break
 
     # print(boxes.xywh)
 cv2.imwrite(str(Path("./", "dog_out.png")), image)

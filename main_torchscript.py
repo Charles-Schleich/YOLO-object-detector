@@ -8,36 +8,7 @@ import torch
 from tqdm import tqdm
 import os
 from torch import jit
-
-
-def prepare_image(image: np.ndarray, shape: tuple) -> np.ndarray:
-    """Prepare the image for the network.
-
-    Currently only supports the following
-    - Resize
-    - Normalise
-    """
-    # Normalize for Object Detection
-    # print(image[0][0])
-    # print("Equal ",image.array_equiv(image))
-    # print("Equal ",(image == image).all())
-    image_norm = cv2.normalize(
-        src=image,
-        dst=None,
-        alpha=0,
-        beta=255,
-        norm_type=cv2.NORM_MINMAX,
-        dtype=cv2.CV_8UC1,
-    )
-
-    # print("Equal image_norm",(image == image_norm).all())
-
-    # Resize input image to match net size
-    image = cv2.resize(image, shape)
-
-    # print(image)
-
-    return image
+import matplotlib.pyplot as plt
 
 
 def forward_pass(
@@ -51,6 +22,15 @@ def forward_pass(
     network.setInput(blob)
     # 1 for output type, 1 for batch dim
     return network.forward(output_names)[0][0]
+
+
+def draw_bounding_box(img, class_id, confidence, x, y, x_plus_w, y_plus_h, classes):
+    colors = np.random.uniform(0, 255, size=(len(classes), 3))
+    label = f'{classes[class_id]} ({confidence:.2f})'
+    color = colors[class_id]
+    cv2.rectangle(img, (x, y), (x_plus_w, y_plus_h), color, 2)
+    cv2.putText(img, label, (x - 10, y - 10),
+                cv2.FONT_HERSHEY_SIMPLEX, 1, color, 2)
 
 
 def draw_boxes(
@@ -101,94 +81,6 @@ def extract_boxes(predictions: np.ndarray, size_ratio: np.ndarray) -> np.ndarray
     return boxes
 
 
-def process_output(
-    outputs: np.ndarray,
-    size_ratio: np.ndarray,
-    conf_threshold: float = 0.5,
-    iou_threshold: float = 0.5,
-) -> tuple[np.ndarray]:
-    # outputs 
-    # [ [x,y,w,h,p1,p2,p3...p80],   detection 1
-    #   [x,y,w,h,p1,p2,p3...p80],   detection 2
-    #   [x,y,w,h,p1,p2,p3...p80],   detection 3
-    #   ...
-    #   [x,y,w,h,p1,p2,p3...p80],   detection 80
-    # ] 
- 
-
-    """Process the output of the yolo model to get a collection of bounding boxes.
-
-    Parameters
-    ----------
-    outputs : np.ndarray
-        Full YOLO model output of shape (8400, 84).
-        8400 = Number of detected Objects
-        84 = Box features (x_cent, y_cent, width, height, *prob_classes)
-    size_ratio : np.ndarray
-        The ratio of the original image size to the model input size.
-    conf_threshold : float, optional
-        The threshold for filtering out low confidence predictions.
-        Default is 0.5.
-    iou_threshold : float, optional
-        The Intersection Over Union (IOU) threshold for non-maxima suppression.
-        Default is 0.5.
-
-    Returns
-    -------
-    tuple[np.ndarray]
-        The surviving boxes after non-maxima suppression, their scores, and class IDs.
-    """
-    # outputs = outputs.numpy()
-
-    def predicate(row):
-        any_row_beats_threshold = (row > conf_threshold).any()
-        return any_row_beats_threshold
-
-    # print("outputs TYPE", type(outputs))
-    # Ignore x,y,w,h, values
-    obj_conf = outputs[:,4:].numpy()
-    # Apply the predicate function to each row and create a boolean mask
-    mask = np.apply_along_axis(predicate, axis=1, arr=obj_conf)
-    print("mask", mask.shape)
-    # outputs_above_conf_thresh
-    outputs = outputs[mask]
-    print("outputs", outputs.shape)
-    outputs = outputs.numpy()
-    print("outputs", outputs.shape)
-
-
-    # Get the anchors the have a high confidence that they contain an object
-    # Multiply class confidence with bounding box confidence    # valid_mask = max_scores > conf_threshold
-    # outputs = outputs[valid_mask]
-    # max_scores = max_scores[valid_mask]
-    max_scores = np.max(outputs[:, 4:], axis=1)
-    print("max_scores",max_scores)
-    print("max_scores len ",max_scores.shape)
-
-    # Filter out boxes where the class is ambiguous (low max score)
-    # valid_mask = max_scores > conf_threshold
-    # outputs = outputs[valid_mask]
-    # max_scores = max_scores[valid_mask]
-
-    # Get the class id corresponding to the max score
-    class_ids = np.argmax(outputs[:, 4:], axis=-1)
-    print("class_ids",class_ids)
-    # np.set_printoptions(threshold=sys.maxsize)
-    print("class_ids",class_ids)
-
-    # Get bounding boxes for each object
-    boxes = extract_boxes(outputs, size_ratio)
-
-    # Apply non-maxima suppression to suppress weak, overlapping bounding boxes
-    indices = cv2.dnn.NMSBoxes(
-        boxes, max_scores, conf_threshold, iou_threshold)
-    
-    print("indices",indices)
-
-    # Return the surviving boxes, their scores and class ids
-    return boxes[indices], max_scores[indices], class_ids[indices]
-
-
 def main() -> None:
     """Run script."""
 
@@ -204,8 +96,8 @@ def main() -> None:
     os.makedirs(output_folder, exist_ok=True)
 
     # Load the pretrained network ONNX file and the associated class names
-    net = cv2.dnn.readNet(model_path)
-    output_names = net.getUnconnectedOutLayersNames()
+    # net = cv2.dnn.readNet(model_path)
+    # output_names = net.getUnconnectedOutLayersNames()
 
     # Get the expected image dimensions based on the model name (width x height)
     input_shape = Path(model_path).stem.split("_")[-1].split("x")
@@ -223,51 +115,82 @@ def main() -> None:
     for img_path in tqdm(file_list, "Drawing boxes on images"):
         print(img_path)
 
-        image = cv2.imread(str(img_path))
+        original_image = cv2.imread(str(img_path))
+        [height, width, _] = original_image.shape
+        length = max((height, width))
+        image = np.zeros((length, length, 3), np.uint8)
+        image[0:height, 0:width] = original_image
+        scale = length / 640
 
-        # Get the size ratio (width x height) to reposition the boxes
-        size_ratio = np.divide(image.shape[1::-1], input_shape)
-
-        # print("image", image[0][0:10])
-        # print("image", image.shape)
         # Prepare the image and pass through the network
         input_shape = (640, 640)
-        prepared_image = prepare_image(image, input_shape)
-        # print("prepared:", prepared_image[0][0:10])
-        # print("prepared:", prepared_image.shape)
+        image = cv2.resize(image, input_shape)
+        print("image type:", type(image))
+        print("image")
+        print(image[0][0:3], image[0][-1])
 
         # PyTorch Method
-        net = jit.load('./model/yolov8n.torchscript')
-        net.eval()
-        tensor = torch.from_numpy(prepared_image)
+        net = jit.load('./yolov8n.torchscript')
+        tensor = torch.from_numpy(image)
+        # Transpose height and width
+        tensor = tensor.transpose_(0, 1)
         tensor = tensor.transpose_(0, 2)
-        # print("tensor Shape : ",tensor.shape)
-        tensor = tensor.unsqueeze(0)
+        print("input tensor", tensor.shape)
+        # Swap BGR -> RGB
+        tensor = tensor[[2, 1, 0]]
         tensor = tensor.float()
+        tensor = tensor/255
+        tensor = tensor.unsqueeze(0)
+        # Pass through Network
+        output = net(tensor)
+        output = output.transpose_(1, 2)
+        output = np.array(output)
+        output = output.squeeze()
+        # print("output")
+        # print("output", output.shape)
+        # print("outputs.type",type(output))
+        # print("outputs.type",output.dtype)
+        # print(output[0][0:6])
+        rows = output.shape[0]
+        boxes = []
+        scores = []
+        class_ids = []
 
-        print("tensor Shape : ", tensor.shape)
-        print(tensor[0])
-        output_pt = net(tensor)
-        # 
-        print("output_pt", output_pt.shape)
-        # x,y,w,h
-        output_pt = output_pt.transpose_(1, 2)
-        print("output_pt ", output_pt[0][0][0:20])
-        # print("output_pt ", output_pt[0][1][0:20])
-        print("output_pt ", output_pt.shape)
+        for i in range(rows):
+            classes_scores = output[i][4:]
+            (minScore, maxScore, minClassLoc, (x, maxClassIndex)
+             ) = cv2.minMaxLoc(classes_scores)
+            if maxScore >= 0.25:
+                box = [
+                    output[i][0] - (0.5 * output[i][2]
+                                    ), output[i][1] - (0.5 * output[i][3]),
+                    output[i][2], output[i][3]]
+                boxes.append(box)
+                scores.append(maxScore)
+                class_ids.append(maxClassIndex)
 
-        # print("output_pt", output_pt.shape)
+        result_boxes = cv2.dnn.NMSBoxes(boxes, scores, 0.25, 0.45, 0.5)
+        # print(result_boxes)
 
-        # Get a list of bounding boxes in the original img dimensions
-        boxes, scores, class_ids = process_output(
-            output_pt[0], size_ratio, conf_threshold, iou_threshold
-        )
+        detections = []
+        for i in range(len(result_boxes)):
+            index = result_boxes[i]
+            box = boxes[index]
+            detection = {
+                'class_id': class_ids[index],
+                'class_name': class_names[class_ids[index]],
+                'confidence': scores[index],
+                'box': box,
+                'scale': scale}
+            detections.append(detection)
+            draw_bounding_box(original_image, class_ids[index], scores[index], round(box[0] * scale), round(box[1] * scale),
+                              round((box[0] + box[2]) * scale), round((box[1] + box[3]) * scale), class_names)
 
-        # # Draw the bounding boxes onto the original image and save
-        output_img = draw_boxes(
-            image, boxes, scores, class_ids, class_names, class_colors
-        )
-        cv2.imwrite(str(Path(output_folder, img_path.name)), output_img)
+        cv2.imshow('image', original_image)
+        cv2.waitKey(0)
+        cv2.destroyAllWindows()
+
+        return detections
 
 
 if __name__ == "__main__":
