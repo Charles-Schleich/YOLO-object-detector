@@ -1,69 +1,28 @@
 """Executable script to apply bounding boxes to images."""
 
 from pathlib import Path
-import sys
 import cv2
 import numpy as np
 import torch
 from tqdm import tqdm
 import os
 from torch import jit
-import matplotlib.pyplot as plt
+import torchshow as ts
 
-
-def forward_pass(
-    image: np.ndarray, network: cv2.dnn.Net, output_names: tuple
-) -> np.ndarray:
-    """Pass a pre-processed image through the network and extract the outputs.
-
-    Will also apply 1/255 scaling to the input image
-    """
-    blob = cv2.dnn.blobFromImage(image, 1 / 255.0)
-    network.setInput(blob)
-    # 1 for output type, 1 for batch dim
-    return network.forward(output_names)[0][0]
-
-
-def draw_bounding_box(img, class_id, confidence, x, y, x_plus_w, y_plus_h, classes):
+def draw_bounding_box(img: np.ndarray,
+                      class_id, 
+                      confidence, 
+                      x: int, 
+                      y: int, 
+                      x_plus_w: int, 
+                      y_plus_h: int, 
+                      classes: np.ndarray) -> np.ndarray:
     colors = np.random.uniform(0, 255, size=(len(classes), 3))
     label = f'{classes[class_id]} ({confidence:.2f})'
     color = colors[class_id]
     cv2.rectangle(img, (x, y), (x_plus_w, y_plus_h), color, 2)
     cv2.putText(img, label, (x - 10, y - 10),
                 cv2.FONT_HERSHEY_SIMPLEX, 1, color, 2)
-
-
-def draw_boxes(
-    image: np.ndarray,
-    boxes: np.ndarray,
-    scores: np.ndarray,
-    class_ids: np.ndarray,
-    class_names: list,
-    class_colors: np.ndarray,
-) -> np.ndarray:
-    """Draw the bounding boxes onto the pixel values of the image."""
-    for box, score, class_id in zip(boxes, scores, class_ids):
-        # Get the pixes coordinates and the appropriate colour and name
-        x, y, w, h = box.astype(int)
-        color = class_colors[class_id]
-        label = f"{class_names[class_id]} {int(score * 100)}%"
-
-        # TODO Find a better way to perform the autoscaling
-        scale = int(0.005 * min(image.shape[:2]))
-
-        # Draw the rectangle and text onto the image
-        cv2.rectangle(image, (x, y), (x + w, y + h), color, thickness=scale)
-        # cv2.getTextSize(label, cv2.FONT_HERSHEY_SIMPLEX, lw//5, lw//2)
-        cv2.putText(
-            image,
-            label,
-            org=(x, y - 10),
-            fontFace=cv2.FONT_HERSHEY_SIMPLEX,
-            fontScale=scale // 4,
-            color=color,
-            thickness=scale // 2,
-        )
-    return image
 
 
 def extract_boxes(predictions: np.ndarray, size_ratio: np.ndarray) -> np.ndarray:
@@ -85,29 +44,19 @@ def main() -> None:
     """Run script."""
 
     # Initial args
-    model_path = "model/yolov7-tiny_480x640.onnx"
     class_name_path = "model/class_names.txt"
     image_folder = "images"
     output_folder = "outputs"
-    conf_threshold = 0.5
-    iou_threshold = 0.5
 
     # Create the output folder if it doesn't exist
     os.makedirs(output_folder, exist_ok=True)
 
-    # Load the pretrained network ONNX file and the associated class names
-    # net = cv2.dnn.readNet(model_path)
-    # output_names = net.getUnconnectedOutLayersNames()
+    # Load the pretrained network torchscript file
+    net = jit.load('./yolov8n.torchscript')
 
-    # Get the expected image dimensions based on the model name (width x height)
-    input_shape = Path(model_path).stem.split("_")[-1].split("x")
-    input_shape = [int(x) for x in input_shape]
-    input_shape = input_shape[::-1]
 
     # Get names and colors to represent each class
     class_names = [x.strip() for x in open(class_name_path).readlines()]
-    class_colors = np.random.default_rng(3).uniform(
-        0, 255, size=(len(class_names), 3))
 
     # Get a list of images to run over
     file_list = list(Path(image_folder).glob("*dog*"))
@@ -128,9 +77,7 @@ def main() -> None:
         print("image type:", type(image))
         print("image")
         print(image[0][0:3], image[0][-1])
-
         # PyTorch Method
-        net = jit.load('./yolov8n.torchscript')
         tensor = torch.from_numpy(image)
         # Transpose height and width
         tensor = tensor.transpose_(0, 1)
@@ -140,17 +87,34 @@ def main() -> None:
         tensor = tensor[[2, 1, 0]]
         tensor = tensor.float()
         tensor = tensor/255
+        r = tensor[0]
+        g = tensor[1]
+        b = tensor[2]
+        print("r Input", r[0][0:10])
+        print("g Input", g[0][0:10])
+        print("b Input", b[0][0:10])
+        
+
+        # ts.show(tensor[0])
+        # ts.show(tensor[1])
+        # ts.show(tensor[2])
+
         tensor = tensor.unsqueeze(0)
+        # tensor
+        print(tensor.dtype)
         # Pass through Network
         output = net(tensor)
         output = output.transpose_(1, 2)
         output = np.array(output)
         output = output.squeeze()
-        # print("output")
-        # print("output", output.shape)
-        # print("outputs.type",type(output))
-        # print("outputs.type",output.dtype)
-        # print(output[0][0:6])
+        print("output")
+        print("output", output.shape)
+        print("outputs.type",type(output))
+        print("outputs.type",output.dtype)
+        print(output[0][0:4])
+        print(output[1][0:4])
+        print(output[2][0:4])
+        print(output[3][0:4])
         rows = output.shape[0]
         boxes = []
         scores = []
@@ -190,7 +154,7 @@ def main() -> None:
         cv2.waitKey(0)
         cv2.destroyAllWindows()
 
-        return detections
+        # return detections
 
 
 if __name__ == "__main__":
